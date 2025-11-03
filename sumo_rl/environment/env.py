@@ -267,14 +267,14 @@ class SumoEnvironment(gym.Env):
         if seed is not None:
             self.sumo_seed = seed
         self._start_simulation()
-
+        
         self._build_traffic_signals(self.sumo)
 
         self.vehicles = dict()
         self.num_arrived_vehicles = 0
         self.num_departed_vehicles = 0
         self.num_teleported_vehicles = 0
-
+        
         if self.single_agent:
             return self._compute_observations()[self.ts_ids[0]], self._compute_info()
         else:
@@ -436,13 +436,7 @@ class SumoEnvironment(gym.Env):
         # === Flow Metrics Implementation ===
         
         # Get step-wise counts from SUMO (these are per-step, not cumulative)
-        n_departed_this_step = self.sumo.simulation.getDepartedNumber()
         n_arrived_this_step = self.sumo.simulation.getArrivedNumber()
-        
-        # Accumulate totals across the episode
-        # These track cumulative values since episode start
-        self.total_departed += n_departed_this_step
-        self.total_arrived += n_arrived_this_step
         
         # Calculate instantaneous outflow rate (vehicles/second)
         # This represents the rate at which vehicles are leaving the network
@@ -458,7 +452,7 @@ class SumoEnvironment(gym.Env):
         # Sanity check: vehicles in network should approximately equal
         # (total departed - total arrived), accounting for initial vehicles
         # and any vehicles that may have been teleported/removed
-        expected_vehicles = self.total_departed - self.total_arrived
+        expected_vehicles = self.num_departed_vehicles - self.num_arrived_vehicles
         
         # === Per-Vehicle Waiting Times (Final Step Only) ===
         # Check if this is the final step of the episode
@@ -482,10 +476,10 @@ class SumoEnvironment(gym.Env):
             
             # New flow metrics
             # Total vehicles that entered the network since episode start
-            "system_inflow": float(self.total_departed),
+            "system_inflow": float(self.num_departed_vehicles),
             
             # Total vehicles that successfully exited the network since episode start
-            "system_throughput": float(self.total_arrived),
+            "system_throughput": float(self.num_arrived_vehicles),
             
             # Instantaneous outflow rate in vehicles per second
             "system_outflow_rate": outflow_rate,
