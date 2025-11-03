@@ -421,23 +421,88 @@ class SumoEnvironment(gym.Env):
         self.num_teleported_vehicles += self.sumo.simulation.getEndingTeleportNumber()
 
     def _get_system_info(self):
+        """
+        Compute system-level metrics for the current simulation step.
+        
+        Returns:
+            dict: Dictionary containing system-wide performance metrics including
+                stopped vehicles, waiting times, speeds, and flow metrics.
+        """
+        # Get current vehicle list and their states
         vehicles = self.sumo.vehicle.getIDList()
         speeds = [self.sumo.vehicle.getSpeed(vehicle) for vehicle in vehicles]
         waiting_times = [self.sumo.vehicle.getWaitingTime(vehicle) for vehicle in vehicles]
-        num_backlogged_vehicles = len(self.sumo.simulation.getPendingVehicles())
-        return {
-            "system_total_running": len(vehicles),
-            "system_total_backlogged": num_backlogged_vehicles,
-            "system_total_stopped": sum(
-                int(speed < 0.1) for speed in speeds
-            ),  # In SUMO, a vehicle is considered halting if its speed is below 0.1 m/s
-            "system_total_arrived": self.num_arrived_vehicles,
-            "system_total_departed": self.num_departed_vehicles,
-            "system_total_teleported": self.num_teleported_vehicles,
+        
+        # === Flow Metrics Implementation ===
+        
+        # Get step-wise counts from SUMO (these are per-step, not cumulative)
+        n_departed_this_step = self.sumo.simulation.getDepartedNumber()
+        n_arrived_this_step = self.sumo.simulation.getArrivedNumber()
+        
+        # Accumulate totals across the episode
+        # These track cumulative values since episode start
+        self.total_departed += n_departed_this_step
+        self.total_arrived += n_arrived_this_step
+        
+        # Calculate instantaneous outflow rate (vehicles/second)
+        # This represents the rate at which vehicles are leaving the network
+        # We use delta_time as the time window for rate calculation
+        if self.delta_time > 0:
+            outflow_rate = float(n_arrived_this_step) / float(self.delta_time)
+        else:
+            outflow_rate = 0.0
+        
+        # Get current vehicle count for validation
+        current_vehicles = len(vehicles)
+        
+        # Sanity check: vehicles in network should approximately equal
+        # (total departed - total arrived), accounting for initial vehicles
+        # and any vehicles that may have been teleported/removed
+        expected_vehicles = self.total_departed - self.total_arrived
+        
+        # === Per-Vehicle Waiting Times (Final Step Only) ===
+        # Check if this is the final step of the episode
+        is_final_step = self.sim_step >= self.sim_max_time
+        
+        if is_final_step:
+            # At the final step, capture waiting time for every vehicle still in network
+            per_vehicle_waiting_times = [float(wt) for wt in waiting_times]
+        else:
+            # For all other steps, return empty list to save memory
+            per_vehicle_waiting_times = []
+        
+        # Build the info dictionary with original metrics plus new flow metrics
+        info = {
+            # Original metrics (preserved)
+            # In SUMO, a vehicle is considered halting if its speed is below 0.1 m/s
+            "system_total_stopped": sum(int(speed < 0.1) for speed in speeds),
             "system_total_waiting_time": sum(waiting_times),
             "system_mean_waiting_time": 0.0 if len(vehicles) == 0 else np.mean(waiting_times),
             "system_mean_speed": 0.0 if len(vehicles) == 0 else np.mean(speeds),
+            
+            # New flow metrics
+            # Total vehicles that entered the network since episode start
+            "system_inflow": float(self.total_departed),
+            
+            # Total vehicles that successfully exited the network since episode start
+            "system_throughput": float(self.total_arrived),
+            
+            # Instantaneous outflow rate in vehicles per second
+            "system_outflow_rate": outflow_rate,
+            
+            # Current number of vehicles in the network
+            "system_total_vehicles": float(current_vehicles),
+            
+            # Additional diagnostic metric for validation
+            # This helps detect discrepancies (e.g., from teleported vehicles)
+            "system_expected_vehicles": float(expected_vehicles),
+            
+            # Per-vehicle waiting times (populated only at final step)
+            # This enables distribution analysis to detect "straggler starvation"
+            "per_vehicle_waiting_times": per_vehicle_waiting_times,
         }
+        
+        return info
 
     def _get_per_agent_info(self):
         stopped = [self.traffic_signals[ts].get_total_queued() for ts in self.ts_ids]
